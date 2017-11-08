@@ -241,7 +241,12 @@ drop                               [Optional]  Drop database specified with agru
                     var versionInfo = (JObject) JsonConvert.DeserializeObject(Encoding.UTF8.GetString(await wc.DownloadDataTaskAsync($"https://api.nuget.org/v3/registration3/{nuget.Trim().ToLower()}/index.json")));
                     var packageRef =
                         ((JArray) versionInfo["items"]?.FirstOrDefault()?["items"])
-                        ?.Cast<JObject>().OrderByDescending(x => new Version(x["catalogEntry"]?["version"].Value<string>()))
+                        ?.Cast<JObject>().OrderByDescending(x =>
+                        {
+                            var xversion = x["catalogEntry"]?["version"].Value<string>();
+                            if(xversion==null)return new Version();
+                            return new Version(xversion.Split('-')[0]);
+                        })
                         .FirstOrDefault();
                     if (packageRef == null)
                     {
