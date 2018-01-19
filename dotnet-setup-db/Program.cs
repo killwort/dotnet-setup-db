@@ -39,6 +39,7 @@ nuget               n              [Mandatory] Database driver nuget package nam
 type                t              [Mandatoty] Database driver full type name.
 connect             c, s           [Mandatory] Database connection string. It must allow connecting to DBMS without existing database.
 script                             [Optional]  Database script file name. Defaults to create.sql.
+single-line                        [Optional]  Run every single line of the script in separate command.
 create                             [Optional]  Create new database before executing. This is default.
 nocreate                           [Optional]  Do not create new database before executing.
 transaction         tx             [Optional]  Wrap script into transaction. This is default.
@@ -51,7 +52,7 @@ pkgpath             pkg, p         [Optional]  Path to directory to use for nuge
         static int Main(string[] args)
         {
             string assembly = null, nuget = null, type = null, cstring = null, script = "create.sql", drop = null, pkgPath = ".pkg";
-            bool create = true, tx = true;
+            bool create = true, tx = true, singleLine=false;
             for (var i = 0; i < args.Length; i++)
             {
                 switch (args[i].ToLower().TrimStart('-', '/', '\\'))
@@ -134,6 +135,9 @@ pkgpath             pkg, p         [Optional]  Path to directory to use for nuge
                     case "create":
                         create = true;
                         break;
+                    case "single-line":
+                        singleLine = true;
+                        break;
                     case "nocreate":
                     case "no-create":
                         create = false;
@@ -188,7 +192,7 @@ pkgpath             pkg, p         [Optional]  Path to directory to use for nuge
                 Help("Connection string must be specified.");
                 return -2;
             }
-            if (!File.Exists(script))
+            if (!File.Exists(script) && string.IsNullOrEmpty(drop))
             {
                 Help($"Script file {script} does not exist.");
                 return -4;
@@ -210,10 +214,21 @@ pkgpath             pkg, p         [Optional]  Path to directory to use for nuge
                 if (drop != null)
                 {
                     Console.Error.WriteLine($"Dropping database {drop}");
-                    using (var createCmd = cnn.CreateCommand())
+                    using (var dropCmd = cnn.CreateCommand())
                     {
-                        createCmd.CommandText = "DROP DATABASE " + drop;
-                        createCmd.ExecuteNonQuery();
+                        if (asm.GetName().Name == "Npgsql")
+                        {
+                            Console.Error.WriteLine($"Terminating backends for {drop}");
+                            dropCmd.CommandText = "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = @dbname AND pid <> pg_backend_pid();";
+                            var p = dropCmd.CreateParameter();
+                            p.ParameterName = "dbname";
+                            p.DbType = DbType.String;
+                            p.Value = drop;
+                            dropCmd.Parameters.Add(p);
+                            dropCmd.ExecuteNonQuery();
+                        }
+                        dropCmd.CommandText = "DROP DATABASE " + drop;
+                        dropCmd.ExecuteNonQuery();
                     }
                 }
                 else
@@ -236,12 +251,29 @@ pkgpath             pkg, p         [Optional]  Path to directory to use for nuge
                         Console.Error.WriteLine("Entering transaction");
                         txn = cnn.BeginTransaction();
                     }
-                    var scriptData = File.ReadAllText(script);
-                    using (var cmd = cnn.CreateCommand())
+
+                    if (singleLine)
                     {
-                        cmd.CommandText = scriptData;
-                        cmd.ExecuteNonQuery();
+                        var scriptData = File.ReadAllLines(script);
+                        using (var cmd = cnn.CreateCommand())
+                        {
+                            foreach (var line in scriptData)
+                            {
+                                cmd.CommandText = line;
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
                     }
+                    else
+                    {
+                        var scriptData = File.ReadAllText(script);
+                        using (var cmd = cnn.CreateCommand())
+                        {
+                            cmd.CommandText = scriptData;
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+
                     if (tx && txn != null)
                     {
                         txn.Commit();
